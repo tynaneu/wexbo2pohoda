@@ -2,29 +2,20 @@ import pytest
 import os
 import tempfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from datetime import datetime
-from unittest.mock import patch, MagicMock
 
+# Add src to path for imports
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from wexbo2pohoda.wexbo2pohoda import (
-    iso_date,
-    get_text,
-    detect_vat,
-    load_source_xml,
-    generate_output_filename,
-    create_datapack_root,
-    create_invoice_header,
-    create_partner_identity,
-    create_activity,
-    create_invoice_items,
-    create_invoice_element,
-    write_output_xml,
-    NS_DAT,
-    NS_INV,
-    NS_TYP,
-    TEXT_POLOZKY
+    convert_xml, get_text, detect_vat, iso_date, round_price, get_vat_items,
+    create_invoice_items, create_invoice_element, create_invoice_header,
+    create_partner_identity, create_activity, write_output_xml,
+    load_source_xml, generate_output_filename, create_datapack_root,
+    NS_DAT, NS_INV, NS_TYP,
+    TEXT_POLOZKY, TEXT_POLOZKY_LOW, TEXT_POLOZKY_NONE,
 )
 
 
@@ -427,6 +418,66 @@ class TestCreateInvoiceItems:
         assert unit_price is not None
         assert unit_price.text == '1000.00'
 
+    def test_creates_price_and_pricevat(self, order_element):
+        """Test that price and priceVAT are created."""
+        invoice = ET.Element('invoice')
+        create_invoice_items(invoice, order_element)
+        
+        price = invoice.find(f'.//{{{NS_INV}}}homeCurrency/{{{NS_TYP}}}price')
+        price_vat = invoice.find(f'.//{{{NS_INV}}}homeCurrency/{{{NS_TYP}}}priceVAT')
+        assert price is not None
+        assert price.text == '1000.00'
+        assert price_vat is not None
+        # 1000 * 0.21 = 210.0
+        assert price_vat.text == '210.00'
+
+    def test_creates_text_for_high_vat(self, order_element):
+        """Test that high VAT item uses standard text."""
+        invoice = ET.Element('invoice')
+        create_invoice_items(invoice, order_element)
+        
+        text = invoice.find(f'.//{{{NS_INV}}}text')
+        assert text is not None
+        assert text.text == TEXT_POLOZKY
+
+    def test_creates_text_for_low_vat(self):
+        """Test that low VAT item uses low VAT text."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>0</price_high>
+                <price_vat_high>0</price_vat_high>
+                <price_low>500</price_low>
+                <price_vat_low>560</price_vat_low>
+                <price_none>0</price_none>
+                <price_vat_none>0</price_vat_none>
+            </item>
+        ''')
+        invoice = ET.Element('invoice')
+        create_invoice_items(invoice, item)
+        
+        text = invoice.find(f'.//{{{NS_INV}}}text')
+        assert text is not None
+        assert text.text == TEXT_POLOZKY_LOW
+
+    def test_creates_text_for_none_vat(self):
+        """Test that no VAT item uses no VAT text."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>0</price_high>
+                <price_vat_high>0</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>618</price_none>
+                <price_vat_none>618</price_vat_none>
+            </item>
+        ''')
+        invoice = ET.Element('invoice')
+        create_invoice_items(invoice, item)
+        
+        text = invoice.find(f'.//{{{NS_INV}}}text')
+        assert text is not None
+        assert text.text == TEXT_POLOZKY_NONE
+
 
 class TestCreateInvoiceElement:
     """Unit tests for create_invoice_element function."""
@@ -530,3 +581,202 @@ class TestWriteOutputXml:
         
         with pytest.raises(Exception):
             write_output_xml(datapack, '/nonexistent/directory/file.xml')
+
+
+class TestRoundPrice:
+    """Unit tests for round_price function."""
+
+    def test_round_down_at_4(self):
+        """Test rounding down when second decimal is 4."""
+        assert round_price(100.04) == 100.0
+        assert round_price(100.14) == 100.1
+        assert round_price(100.44) == 100.4
+
+    def test_round_up_at_5(self):
+        """Test rounding up when second decimal is 5."""
+        assert round_price(100.05) == 100.1
+        assert round_price(100.15) == 100.2
+        assert round_price(100.45) == 100.5
+
+    def test_round_up_at_6_and_above(self):
+        """Test rounding up when second decimal is 6 or above."""
+        assert round_price(100.06) == 100.1
+        assert round_price(100.17) == 100.2
+        assert round_price(100.48) == 100.5
+        assert round_price(100.99) == 101.0
+
+    def test_exact_decimal_unchanged(self):
+        """Test that exact decimals stay unchanged."""
+        assert round_price(100.0) == 100.0
+        assert round_price(100.1) == 100.1
+        assert round_price(100.5) == 100.5
+
+    def test_negative_numbers(self):
+        """Test rounding negative numbers."""
+        assert round_price(-100.04) == -100.0
+        assert round_price(-100.05) == -100.1
+        assert round_price(-100.06) == -100.1
+
+    def test_large_numbers(self):
+        """Test rounding large numbers."""
+        assert round_price(9668.04) == 9668.0
+        assert round_price(9668.05) == 9668.1
+        assert round_price(9668.99) == 9669.0
+
+    def test_zero(self):
+        """Test rounding zero."""
+        assert round_price(0.0) == 0.0
+        assert round_price(0.04) == 0.0
+        assert round_price(0.05) == 0.1
+
+
+class TestGetVatItems:
+    """Unit tests for get_vat_items function."""
+
+    def test_single_high_vat(self):
+        """Test invoice with only high VAT."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>1000</price_high>
+                <price_vat_high>1210</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>0</price_none>
+                <price_vat_none>0</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert len(items) == 1
+        assert items[0]['vat_rate'] == 'high'
+        assert items[0]['base_price'] == 1000.0
+        assert items[0]['vat_amount'] == 210.0
+        assert items[0]['price_with_vat'] == 1210.0
+
+    def test_single_low_vat(self):
+        """Test invoice with only low VAT (books)."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>0</price_high>
+                <price_vat_high>0</price_vat_high>
+                <price_low>500</price_low>
+                <price_vat_low>560</price_vat_low>
+                <price_none>0</price_none>
+                <price_vat_none>0</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert len(items) == 1
+        assert items[0]['vat_rate'] == 'low'
+        assert items[0]['base_price'] == 500.0
+        assert items[0]['vat_amount'] == 60.0
+        assert items[0]['price_with_vat'] == 560.0
+
+    def test_single_no_vat(self):
+        """Test invoice with only no VAT items."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>0</price_high>
+                <price_vat_high>0</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>618</price_none>
+                <price_vat_none>618</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert len(items) == 1
+        assert items[0]['vat_rate'] == 'none'
+        assert items[0]['base_price'] == 618.0
+        assert items[0]['vat_amount'] == 0.0
+        assert items[0]['price_with_vat'] == 618.0
+
+    def test_high_and_none_vat(self):
+        """Test invoice with high VAT and no VAT items (invoice 32600049 case)."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>7990.1</price_high>
+                <price_vat_high>9668</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>618</price_none>
+                <price_vat_none>618</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert len(items) == 2
+
+        high_item = next(i for i in items if i['vat_rate'] == 'high')
+        assert high_item['base_price'] == 7990.1
+        assert high_item['price_with_vat'] == 9668.0
+
+        none_item = next(i for i in items if i['vat_rate'] == 'none')
+        assert none_item['base_price'] == 618.0
+        assert none_item['price_with_vat'] == 618.0
+
+    def test_all_three_vat_rates(self):
+        """Test invoice with all three VAT rates."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>1000</price_high>
+                <price_vat_high>1210</price_vat_high>
+                <price_low>500</price_low>
+                <price_vat_low>560</price_vat_low>
+                <price_none>200</price_none>
+                <price_vat_none>200</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert len(items) == 3
+
+        vat_rates = {i['vat_rate'] for i in items}
+        assert vat_rates == {'high', 'low', 'none'}
+
+    def test_empty_prices_returns_zero_item(self):
+        """Test that empty prices return a zero item."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>0</price_high>
+                <price_vat_high>0</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>0</price_none>
+                <price_vat_none>0</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert len(items) == 1
+        assert items[0]['vat_rate'] == 'none'
+        assert items[0]['base_price'] == 0.0
+        assert items[0]['price_with_vat'] == 0.0
+
+    def test_rounding_applied_to_prices(self):
+        """Test that rounding is applied to extracted prices."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>100.04</price_high>
+                <price_vat_high>121.05</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>0</price_none>
+                <price_vat_none>0</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert items[0]['base_price'] == 100.0
+        assert items[0]['price_with_vat'] == 121.1
+
+    def test_missing_price_vat_fields(self):
+        """Test handling of missing price_vat fields."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>1000</price_high>
+                <price_low>0</price_low>
+                <price_none>0</price_none>
+            </item>
+        ''')
+        items = get_vat_items(item)
+        assert len(items) == 1
+        assert items[0]['vat_rate'] == 'high'
+        assert items[0]['base_price'] == 1000.0
+        # Should calculate 1000 * 1.21 = 1210
+        assert items[0]['price_with_vat'] == 1210.0

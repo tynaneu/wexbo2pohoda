@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from wexbo2pohoda.wexbo2pohoda import convert_xml, get_text, detect_vat, iso_date
+from wexbo2pohoda.wexbo2pohoda import convert_xml, get_text, detect_vat, iso_date, round_price, get_vat_items
 
 
 @pytest.fixture
@@ -211,3 +211,250 @@ class TestHelperFunctions:
         vat_type, price = detect_vat(root)
         assert vat_type == 'none'
         assert price == '0'
+
+
+class TestRounding:
+    """Tests for rounding functionality (1 decimal, <=4 down, >5 up)."""
+
+    def test_round_price_down_at_4(self):
+        """Test rounding down when second decimal is 4."""
+        assert round_price(100.04) == 100.0
+        assert round_price(100.14) == 100.1
+        assert round_price(100.44) == 100.4
+
+    def test_round_price_up_at_5(self):
+        """Test rounding up when second decimal is 5."""
+        assert round_price(100.05) == 100.1
+        assert round_price(100.15) == 100.2
+        assert round_price(100.45) == 100.5
+
+    def test_round_price_up_at_6_and_above(self):
+        """Test rounding up when second decimal is 6 or above."""
+        assert round_price(100.06) == 100.1
+        assert round_price(100.17) == 100.2
+        assert round_price(100.48) == 100.5
+        assert round_price(100.99) == 101.0
+
+    def test_round_price_exact_decimal(self):
+        """Test that exact decimals stay unchanged."""
+        assert round_price(100.0) == 100.0
+        assert round_price(100.1) == 100.1
+        assert round_price(100.5) == 100.5
+
+    def test_round_price_negative(self):
+        """Test rounding negative numbers."""
+        assert round_price(-100.04) == -100.0
+        assert round_price(-100.05) == -100.1
+
+
+class TestMultipleVatRates:
+    """Tests for handling invoices with multiple VAT rates."""
+
+    def test_get_vat_items_single_high(self):
+        """Test invoice with only high VAT."""
+        root = ET.fromstring('''
+            <item>
+                <price_high>1000</price_high>
+                <price_vat_high>1210</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>0</price_none>
+                <price_vat_none>0</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(root)
+        assert len(items) == 1
+        assert items[0]['vat_rate'] == 'high'
+        assert items[0]['base_price'] == 1000.0
+        assert items[0]['price_with_vat'] == 1210.0
+
+    def test_get_vat_items_high_and_none(self):
+        """Test invoice with high VAT and no VAT items (like invoice 32600049)."""
+        root = ET.fromstring('''
+            <item>
+                <price_high>7990.1</price_high>
+                <price_vat_high>9668</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>618</price_none>
+                <price_vat_none>618</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(root)
+        assert len(items) == 2
+
+        # Find high VAT item
+        high_item = next(i for i in items if i['vat_rate'] == 'high')
+        assert high_item['base_price'] == 7990.1
+        assert high_item['price_with_vat'] == 9668.0
+
+        # Find no VAT item
+        none_item = next(i for i in items if i['vat_rate'] == 'none')
+        assert none_item['base_price'] == 618.0
+        assert none_item['price_with_vat'] == 618.0
+
+    def test_get_vat_items_all_three_rates(self):
+        """Test invoice with all three VAT rates."""
+        root = ET.fromstring('''
+            <item>
+                <price_high>1000</price_high>
+                <price_vat_high>1210</price_vat_high>
+                <price_low>500</price_low>
+                <price_vat_low>560</price_vat_low>
+                <price_none>200</price_none>
+                <price_vat_none>200</price_vat_none>
+            </item>
+        ''')
+        items = get_vat_items(root)
+        assert len(items) == 3
+
+
+class TestInvoiceTotals:
+    """Tests for correct invoice total calculations."""
+
+    def test_invoice_32600049_total(self, temp_output_dir):
+        """Test that invoice 32600049 total is 10286 (9668 + 618)."""
+        # Create test XML with invoice 32600049 data
+        test_xml = '''<?xml version="1.0" encoding="utf-8"?>
+<items>
+    <item>
+        <invoice_id>32600049</invoice_id>
+        <supplier_ico>31930086</supplier_ico>
+        <date_create>2026-02-20</date_create>
+        <date_delivery>2026-02-20</date_delivery>
+        <date_due>2026-03-02</date_due>
+        <billing_name>Test Company</billing_name>
+        <billing_street>Test Street</billing_street>
+        <billing_street_number>1</billing_street_number>
+        <billing_town>Prague</billing_town>
+        <billing_zip>11000</billing_zip>
+        <billing_state>CZ</billing_state>
+        <price_high>7990.1</price_high>
+        <price_vat_high>9668</price_vat_high>
+        <price_low>0</price_low>
+        <price_vat_low>0</price_vat_low>
+        <price_none>618</price_none>
+        <price_vat_none>618</price_vat_none>
+    </item>
+</items>'''
+
+        input_file = os.path.join(temp_output_dir, 'input.xml')
+        output_file = os.path.join(temp_output_dir, 'output.xml')
+
+        with open(input_file, 'w') as f:
+            f.write(test_xml)
+
+        convert_xml(input_file, output_file)
+
+        tree = ET.parse(output_file)
+        root = tree.getroot()
+
+        ns = {
+            'inv': 'http://www.stormware.cz/schema/version_2/invoice.xsd',
+            'typ': 'http://www.stormware.cz/schema/version_2/type.xsd'
+        }
+
+        # Get all unit prices
+        unit_prices = root.findall('.//typ:unitPrice', ns)
+        total = sum(float(p.text) for p in unit_prices)
+
+        # Total should be 7990.1 + 618 = 8608.1 (base prices)
+        assert abs(total - 8608.1) < 0.01, f"Expected 8608.1, got {total}"
+
+    def test_invoice_with_rounding(self, temp_output_dir):
+        """Test that prices are rounded to 1 decimal correctly."""
+        test_xml = '''<?xml version="1.0" encoding="utf-8"?>
+<items>
+    <item>
+        <invoice_id>TEST001</invoice_id>
+        <supplier_ico>12345678</supplier_ico>
+        <date_create>2026-01-01</date_create>
+        <date_delivery>2026-01-01</date_delivery>
+        <date_due>2026-01-15</date_due>
+        <billing_name>Test</billing_name>
+        <billing_street>Test</billing_street>
+        <billing_street_number>1</billing_street_number>
+        <billing_town>Prague</billing_town>
+        <billing_zip>11000</billing_zip>
+        <billing_state>CZ</billing_state>
+        <price_high>100.04</price_high>
+        <price_vat_high>121.05</price_vat_high>
+        <price_low>0</price_low>
+        <price_vat_low>0</price_vat_low>
+        <price_none>0</price_none>
+        <price_vat_none>0</price_vat_none>
+    </item>
+</items>'''
+
+        input_file = os.path.join(temp_output_dir, 'input.xml')
+        output_file = os.path.join(temp_output_dir, 'output.xml')
+
+        with open(input_file, 'w') as f:
+            f.write(test_xml)
+
+        convert_xml(input_file, output_file)
+
+        tree = ET.parse(output_file)
+        root = tree.getroot()
+
+        ns = {'typ': 'http://www.stormware.cz/schema/version_2/type.xsd'}
+
+        unit_price = root.find('.//typ:unitPrice', ns)
+
+        # 100.04 should round to 100.0
+        assert unit_price.text == '100.00', f"Expected '100.00', got '{unit_price.text}'"
+
+    def test_invoice_32600049_with_vat_total(self, temp_output_dir):
+        """Test that invoice 32600049 with-VAT total is 10286 (9668 + 618)."""
+        test_xml = '''<?xml version="1.0" encoding="utf-8"?>
+<items>
+    <item>
+        <invoice_id>32600049</invoice_id>
+        <supplier_ico>31930086</supplier_ico>
+        <date_create>2026-02-20</date_create>
+        <date_delivery>2026-02-20</date_delivery>
+        <date_due>2026-03-02</date_due>
+        <billing_name>Test Company</billing_name>
+        <billing_street>Test Street</billing_street>
+        <billing_street_number>1</billing_street_number>
+        <billing_town>Prague</billing_town>
+        <billing_zip>11000</billing_zip>
+        <billing_state>CZ</billing_state>
+        <price_high>7990.1</price_high>
+        <price_vat_high>9668</price_vat_high>
+        <price_low>0</price_low>
+        <price_vat_low>0</price_vat_low>
+        <price_none>618</price_none>
+        <price_vat_none>618</price_vat_none>
+    </item>
+</items>'''
+
+        input_file = os.path.join(temp_output_dir, 'input.xml')
+        output_file = os.path.join(temp_output_dir, 'output.xml')
+
+        with open(input_file, 'w') as f:
+            f.write(test_xml)
+
+        convert_xml(input_file, output_file)
+
+        tree = ET.parse(output_file)
+        root = tree.getroot()
+
+        ns = {
+            'inv': 'http://www.stormware.cz/schema/version_2/invoice.xsd',
+            'typ': 'http://www.stormware.cz/schema/version_2/type.xsd'
+        }
+
+        # Check invoiceSummary has correct totals
+        summary = root.find('.//inv:invoiceSummary/inv:homeCurrency', ns)
+        price_high = summary.find('typ:priceHigh', ns)
+        price_high_sum = summary.find('typ:priceHighSum', ns)
+        price_none = summary.find('typ:priceNone', ns)
+
+        assert price_high is not None, "Summary should have priceHigh"
+        assert price_high_sum is not None, "Summary should have priceHighSum"
+        assert price_none is not None, "Summary should have priceNone"
+
+        # Total with VAT should be 9668 + 618 = 10286
+        total_with_vat = float(price_high_sum.text) + float(price_none.text)
+        assert abs(total_with_vat - 10286.0) < 0.01, f"Expected 10286.0, got {total_with_vat}"
