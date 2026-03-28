@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <item>
+    <invoice_id>INV-001</invoice_id>
+    <supplier_ico>12345678</supplier_ico>
+    <date_create>2024-01-15</date_create>
+    <date_delivery>2024-01-15</date_delivery>
+    <date_due>2024-02-15</date_due>
+    <billing_name>Acme Corporation</billing_name>
+    <billing_street>Main Street</billing_street>
+    <billing_street_number>123</billing_street_number>
+    <billing_town>Prague</billing_town>
+    <billing_zip>11000</billing_zip>
+    <billing_state>CZ</billing_state>
+    <price_high>1000.00</price_high>
+    <price_low></price_low>
+    <price_none></price_none>
+  </item>
+  <item>
+    <invoice_id>INV-002</invoice_id>
+    <supplier_ico>12345678</supplier_ico>
+    <date_create>2024-01-20</date_create>
+    <date_delivery>2024-01-20</date_delivery>
+    <date_due>2024-02-20</date_due>
+    <billing_name>Beta Ltd</billing_name>
+    <billing_street>Secondary Ave</billing_street>
+    <billing_street_number>456</billing_street_number>
+    <billing_town>Brno</billing_town>
+    <billing_zip>61200</billing_zip>
+    <billing_state>CZ</billing_state>
+    <price_high></price_high>
+    <price_low>500.00</price_low>
+    <price_none></price_none>
+  </item>
+</root>
