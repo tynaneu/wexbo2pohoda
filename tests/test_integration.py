@@ -402,4 +402,59 @@ class TestInvoiceTotals:
         unit_price = root.find('.//typ:unitPrice', ns)
 
         # 100.04 should round to 100.0
-        assert unit_price.text == '100.0', f"Expected '100.0', got '{unit_price.text}'"
+        assert unit_price.text == '100.00', f"Expected '100.00', got '{unit_price.text}'"
+
+    def test_invoice_32600049_with_vat_total(self, temp_output_dir):
+        """Test that invoice 32600049 with-VAT total is 10286 (9668 + 618)."""
+        test_xml = '''<?xml version="1.0" encoding="utf-8"?>
+<items>
+    <item>
+        <invoice_id>32600049</invoice_id>
+        <supplier_ico>31930086</supplier_ico>
+        <date_create>2026-02-20</date_create>
+        <date_delivery>2026-02-20</date_delivery>
+        <date_due>2026-03-02</date_due>
+        <billing_name>Test Company</billing_name>
+        <billing_street>Test Street</billing_street>
+        <billing_street_number>1</billing_street_number>
+        <billing_town>Prague</billing_town>
+        <billing_zip>11000</billing_zip>
+        <billing_state>CZ</billing_state>
+        <price_high>7990.1</price_high>
+        <price_vat_high>9668</price_vat_high>
+        <price_low>0</price_low>
+        <price_vat_low>0</price_vat_low>
+        <price_none>618</price_none>
+        <price_vat_none>618</price_vat_none>
+    </item>
+</items>'''
+
+        input_file = os.path.join(temp_output_dir, 'input.xml')
+        output_file = os.path.join(temp_output_dir, 'output.xml')
+
+        with open(input_file, 'w') as f:
+            f.write(test_xml)
+
+        convert_xml(input_file, output_file)
+
+        tree = ET.parse(output_file)
+        root = tree.getroot()
+
+        ns = {
+            'inv': 'http://www.stormware.cz/schema/version_2/invoice.xsd',
+            'typ': 'http://www.stormware.cz/schema/version_2/type.xsd'
+        }
+
+        # Check invoiceSummary has correct totals
+        summary = root.find('.//inv:invoiceSummary/inv:homeCurrency', ns)
+        price_high = summary.find('typ:priceHigh', ns)
+        price_high_sum = summary.find('typ:priceHighSum', ns)
+        price_none = summary.find('typ:priceNone', ns)
+
+        assert price_high is not None, "Summary should have priceHigh"
+        assert price_high_sum is not None, "Summary should have priceHighSum"
+        assert price_none is not None, "Summary should have priceNone"
+
+        # Total with VAT should be 9668 + 618 = 10286
+        total_with_vat = float(price_high_sum.text) + float(price_none.text)
+        assert abs(total_with_vat - 10286.0) < 0.01, f"Expected 10286.0, got {total_with_vat}"
