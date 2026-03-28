@@ -33,6 +33,75 @@ def get_text(parent, tag):
     v = parent.findtext(tag) or ""
     return v.strip()
 
+def round_price(value):
+    """Round price to 1 decimal place (<=4 down, >5 up).
+    
+    This implements standard rounding where .05 and above rounds up.
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+    d = Decimal(str(value))
+    return float(d.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP))
+
+def get_vat_items(item):
+    """Extract all VAT rate items from an invoice.
+    
+    Returns a list of dicts with vat_rate, base_price, vat_amount, and price_with_vat.
+    Handles invoices with multiple VAT rates (high, low, none).
+    """
+    items = []
+    
+    # High VAT (21%)
+    price_high = get_text(item, "price_high")
+    price_vat_high = get_text(item, "price_vat_high")
+    if price_high and float(price_high) > 0:
+        base = round_price(float(price_high))
+        with_vat = round_price(float(price_vat_high)) if price_vat_high else round_price(float(price_high) * 1.21)
+        vat_amount = round_price(with_vat - base)
+        items.append({
+            'vat_rate': 'high',
+            'base_price': base,
+            'vat_amount': vat_amount,
+            'price_with_vat': with_vat
+        })
+    
+    # Low VAT (12% for books)
+    price_low = get_text(item, "price_low")
+    price_vat_low = get_text(item, "price_vat_low")
+    if price_low and float(price_low) > 0:
+        base = round_price(float(price_low))
+        with_vat = round_price(float(price_vat_low)) if price_vat_low else round_price(float(price_low) * 1.12)
+        vat_amount = round_price(with_vat - base)
+        items.append({
+            'vat_rate': 'low',
+            'base_price': base,
+            'vat_amount': vat_amount,
+            'price_with_vat': with_vat
+        })
+    
+    # No VAT (0%)
+    price_none = get_text(item, "price_none")
+    price_vat_none = get_text(item, "price_vat_none")
+    if price_none and float(price_none) > 0:
+        base = round_price(float(price_none))
+        with_vat = round_price(float(price_vat_none)) if price_vat_none else base
+        items.append({
+            'vat_rate': 'none',
+            'base_price': base,
+            'vat_amount': 0.0,
+            'price_with_vat': with_vat
+        })
+    
+    # If no items found, return a zero item
+    if not items:
+        items.append({
+            'vat_rate': 'none',
+            'base_price': 0.0,
+            'vat_amount': 0.0,
+            'price_with_vat': 0.0
+        })
+    
+    return items
+
 def detect_vat(item):
     high = get_text(item, "price_high")
     low = get_text(item, "price_low")
@@ -151,18 +220,81 @@ def create_invoice_items(invoice, order):
     Args:
         invoice: Parent invoice element
         order: Order XML element
+    
+    Returns:
+        list: VAT items created for use in summary
     """
-    vat_rate, base_price = detect_vat(order)
+    # Get all VAT items (handles multiple VAT rates per invoice)
+    vat_items = get_vat_items(order)
     detail = ET.SubElement(invoice, f"{{{NS_INV}}}invoiceDetail")
-    inv_item = ET.SubElement(detail, f"{{{NS_INV}}}invoiceItem")
     
-    ET.SubElement(inv_item, f"{{{NS_INV}}}text").text = TEXT_POLOZKY
-    ET.SubElement(inv_item, f"{{{NS_INV}}}quantity").text = "1"
-    ET.SubElement(inv_item, f"{{{NS_INV}}}unit").text = "ks"
-    ET.SubElement(inv_item, f"{{{NS_INV}}}rateVAT").text = vat_rate
+    for vat_item in vat_items:
+        inv_item = ET.SubElement(detail, f"{{{NS_INV}}}invoiceItem")
+        
+        # Set item text based on VAT rate
+        if vat_item['vat_rate'] == 'none':
+            item_text = "Zboží bez DPH"
+        elif vat_item['vat_rate'] == 'low':
+            item_text = "Knihy – snížená sazba DPH"
+        else:
+            item_text = TEXT_POLOZKY
+        
+        ET.SubElement(inv_item, f"{{{NS_INV}}}text").text = item_text
+        ET.SubElement(inv_item, f"{{{NS_INV}}}quantity").text = "1"
+        ET.SubElement(inv_item, f"{{{NS_INV}}}unit").text = "ks"
+        # payVAT=false means unitPrice is without VAT
+        ET.SubElement(inv_item, f"{{{NS_INV}}}payVAT").text = "false"
+        ET.SubElement(inv_item, f"{{{NS_INV}}}rateVAT").text = vat_item['vat_rate']
+        
+        # Include unitPrice, price (base), and priceVAT for Pohoda to use exact values
+        home_curr = ET.SubElement(inv_item, f"{{{NS_INV}}}homeCurrency")
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}unitPrice").text = f"{vat_item['base_price']:.2f}"
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}price").text = f"{vat_item['base_price']:.2f}"
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceVAT").text = f"{vat_item['vat_amount']:.2f}"
     
-    home_curr = ET.SubElement(inv_item, f"{{{NS_INV}}}homeCurrency")
-    ET.SubElement(home_curr, f"{{{NS_TYP}}}unitPrice").text = base_price
+    return vat_items
+
+def create_invoice_summary(invoice, vat_items):
+    """Create invoice summary section with VAT totals.
+    
+    This prevents Pohoda from recalculating VAT and uses exact values from source.
+    
+    Args:
+        invoice: Parent invoice element
+        vat_items: List of VAT items from create_invoice_items
+    """
+    summary = ET.SubElement(invoice, f"{{{NS_INV}}}invoiceSummary")
+    
+    # Set rounding options to prevent Pohoda recalculation
+    ET.SubElement(summary, f"{{{NS_INV}}}roundingDocument").text = "none"
+    ET.SubElement(summary, f"{{{NS_INV}}}roundingVAT").text = "none"
+    
+    home_curr = ET.SubElement(summary, f"{{{NS_INV}}}homeCurrency")
+    
+    # Aggregate by VAT rate
+    high_base = sum(v['base_price'] for v in vat_items if v['vat_rate'] == 'high')
+    high_vat = sum(v['vat_amount'] for v in vat_items if v['vat_rate'] == 'high')
+    high_sum = sum(v['price_with_vat'] for v in vat_items if v['vat_rate'] == 'high')
+    
+    low_base = sum(v['base_price'] for v in vat_items if v['vat_rate'] == 'low')
+    low_vat = sum(v['vat_amount'] for v in vat_items if v['vat_rate'] == 'low')
+    low_sum = sum(v['price_with_vat'] for v in vat_items if v['vat_rate'] == 'low')
+    
+    none_base = sum(v['base_price'] for v in vat_items if v['vat_rate'] == 'none')
+    
+    # Add elements for each VAT rate that has values
+    if none_base > 0:
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceNone").text = f"{none_base:.2f}"
+    
+    if low_base > 0:
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceLow").text = f"{low_base:.2f}"
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceLowVAT").text = f"{low_vat:.2f}"
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceLowSum").text = f"{low_sum:.2f}"
+    
+    if high_base > 0:
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceHigh").text = f"{high_base:.2f}"
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceHighVAT").text = f"{high_vat:.2f}"
+        ET.SubElement(home_curr, f"{{{NS_TYP}}}priceHighSum").text = f"{high_sum:.2f}"
 
 def create_invoice_element(datapack, order, idx):
     """Create complete invoice element for an order.
@@ -190,7 +322,8 @@ def create_invoice_element(datapack, order, idx):
     create_invoice_header(header, order)
     create_partner_identity(header, order)
     create_activity(header)
-    create_invoice_items(invoice, order)
+    vat_items = create_invoice_items(invoice, order)
+    create_invoice_summary(invoice, vat_items)
     
     return invoice
 
