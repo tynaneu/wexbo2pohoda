@@ -417,35 +417,33 @@ class TestSchemaValidation:
             home_curr = item.find('inv:homeCurrency', ns)
             assert home_curr is not None, "invoiceItem must contain homeCurrency element"
 
-    def test_item_homecurrency_has_unitprice(self, output_xml):
-        """Test that item homeCurrency contains unitPrice element."""
+    def test_homecurrency_has_unitprice(self, output_xml):
+        """Test that homeCurrency contains unitPrice element."""
         tree = ET.parse(output_xml)
         root = tree.getroot()
         
         ns = {'inv': NS_INV, 'typ': NS_TYP}
-        items = root.findall('.//inv:invoiceItem', ns)
+        currencies = root.findall('.//inv:homeCurrency', ns)
         
-        for item in items:
-            home_curr = item.find('inv:homeCurrency', ns)
-            unit_price = home_curr.find('typ:unitPrice', ns)
-            assert unit_price is not None, "item homeCurrency must contain unitPrice element"
+        for currency in currencies:
+            unit_price = currency.find('typ:unitPrice', ns)
+            assert unit_price is not None, "homeCurrency must contain unitPrice element"
             assert unit_price.text is not None and unit_price.text.strip(), \
                 "unitPrice element must have non-empty content"
 
-    def test_item_homecurrency_has_price_and_pricevat(self, output_xml):
-        """Test that item homeCurrency contains price and priceVAT elements."""
+    def test_homecurrency_has_pricesum(self, output_xml):
+        """Test that homeCurrency contains priceSum element."""
         tree = ET.parse(output_xml)
         root = tree.getroot()
         
         ns = {'inv': NS_INV, 'typ': NS_TYP}
-        items = root.findall('.//inv:invoiceItem', ns)
+        currencies = root.findall('.//inv:homeCurrency', ns)
         
-        for item in items:
-            home_curr = item.find('inv:homeCurrency', ns)
-            price = home_curr.find('typ:price', ns)
-            price_vat = home_curr.find('typ:priceVAT', ns)
-            assert price is not None, "item homeCurrency must contain price element"
-            assert price_vat is not None, "item homeCurrency must contain priceVAT element"
+        for currency in currencies:
+            price_sum = currency.find('typ:priceSum', ns)
+            assert price_sum is not None, "homeCurrency must contain priceSum element"
+            assert price_sum.text is not None and price_sum.text.strip(), \
+                "priceSum element must have non-empty content"
 
     def test_prices_are_numeric(self, output_xml):
         """Test that all prices are valid numeric values."""
@@ -493,12 +491,12 @@ class TestSchemaValidation:
         ns = {'inv': NS_INV}
         invoices = root.findall('.//inv:invoice', ns)
         
-        allowed_tags = {'invoiceHeader', 'invoiceDetail', 'invoiceSummary'}
+        allowed_tags = {'invoiceHeader', 'invoiceDetail'}
         for invoice in invoices:
             for child in invoice:
                 tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
                 assert tag_name in allowed_tags, \
-                    f"invoice should only contain invoiceHeader, invoiceDetail, and invoiceSummary, found {tag_name}"
+                    f"invoice should only contain invoiceHeader and invoiceDetail, found {tag_name}"
 
     def test_no_extra_elements_in_invoiceheader(self, output_xml):
         """Test that invoiceHeader contains only expected elements."""
@@ -524,66 +522,27 @@ class TestSchemaValidation:
         ns = {'inv': NS_INV}
         items = root.findall('.//inv:invoiceItem', ns)
         
-        allowed_tags = {'text', 'quantity', 'unit', 'payVAT', 'rateVAT', 'homeCurrency'}
+        allowed_tags = {'text', 'quantity', 'unit', 'rateVAT', 'homeCurrency'}
         for item in items:
             for child in item:
                 tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
                 assert tag_name in allowed_tags, \
                     f"invoiceItem contains unexpected element: {tag_name}"
 
-    def test_no_extra_elements_in_item_homecurrency(self, output_xml):
-        """Test that item homeCurrency contains only expected elements."""
+    def test_no_extra_elements_in_homecurrency(self, output_xml):
+        """Test that homeCurrency contains only unitPrice and priceSum."""
         tree = ET.parse(output_xml)
         root = tree.getroot()
         
-        ns = {'inv': NS_INV, 'typ': NS_TYP}
-        items = root.findall('.//inv:invoiceItem', ns)
+        ns = {'inv': NS_INV}
+        currencies = root.findall('.//inv:homeCurrency', ns)
         
-        allowed_tags = {'unitPrice', 'price', 'priceVAT'}
-        for item in items:
-            home_curr = item.find('inv:homeCurrency', ns)
-            for child in home_curr:
+        allowed_tags = {'unitPrice', 'priceSum'}
+        for currency in currencies:
+            for child in currency:
                 tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
                 assert tag_name in allowed_tags, \
-                    f"item homeCurrency contains unexpected element: {tag_name}"
-
-    def test_invoice_has_summary(self, output_xml):
-        """Test that invoice contains invoiceSummary element."""
-        tree = ET.parse(output_xml)
-        root = tree.getroot()
-        
-        ns = {'inv': NS_INV}
-        invoices = root.findall('.//inv:invoice', ns)
-        
-        for invoice in invoices:
-            summary = invoice.find('inv:invoiceSummary', ns)
-            assert summary is not None, "invoice must contain invoiceSummary element"
-
-    def test_summary_has_rounding_settings(self, output_xml):
-        """Test that invoiceSummary has rounding settings."""
-        tree = ET.parse(output_xml)
-        root = tree.getroot()
-        
-        ns = {'inv': NS_INV}
-        summaries = root.findall('.//inv:invoiceSummary', ns)
-        
-        for summary in summaries:
-            rounding_doc = summary.find('inv:roundingDocument', ns)
-            rounding_vat = summary.find('inv:roundingVAT', ns)
-            assert rounding_doc is not None, "invoiceSummary must contain roundingDocument"
-            assert rounding_vat is not None, "invoiceSummary must contain roundingVAT"
-
-    def test_summary_has_homecurrency(self, output_xml):
-        """Test that invoiceSummary has homeCurrency element."""
-        tree = ET.parse(output_xml)
-        root = tree.getroot()
-        
-        ns = {'inv': NS_INV}
-        summaries = root.findall('.//inv:invoiceSummary', ns)
-        
-        for summary in summaries:
-            home_curr = summary.find('inv:homeCurrency', ns)
-            assert home_curr is not None, "invoiceSummary must contain homeCurrency"
+                    f"homeCurrency contains unexpected element: {tag_name}"
 
     def test_no_extra_elements_in_address(self, output_xml):
         """Test that address contains only expected elements."""
