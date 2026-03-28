@@ -2,31 +2,20 @@ import pytest
 import os
 import tempfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from datetime import datetime
-from unittest.mock import patch, MagicMock
 
+# Add src to path for imports
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from wexbo2pohoda.wexbo2pohoda import (
-    iso_date,
-    get_text,
-    detect_vat,
-    load_source_xml,
-    generate_output_filename,
-    create_datapack_root,
-    create_invoice_header,
-    create_partner_identity,
-    create_activity,
-    create_invoice_items,
-    create_invoice_element,
-    write_output_xml,
-    round_price,
-    get_vat_items,
-    NS_DAT,
-    NS_INV,
-    NS_TYP,
-    TEXT_POLOZKY
+    convert_xml, get_text, detect_vat, iso_date, round_price, get_vat_items,
+    create_invoice_items, create_invoice_element, create_invoice_header,
+    create_partner_identity, create_activity, write_output_xml,
+    load_source_xml, generate_output_filename, create_datapack_root,
+    NS_DAT, NS_INV, NS_TYP,
+    TEXT_POLOZKY, TEXT_POLOZKY_LOW, TEXT_POLOZKY_NONE,
 )
 
 
@@ -441,6 +430,53 @@ class TestCreateInvoiceItems:
         assert price_vat is not None
         # 1000 * 0.21 = 210.0
         assert price_vat.text == '210.00'
+
+    def test_creates_text_for_high_vat(self, order_element):
+        """Test that high VAT item uses standard text."""
+        invoice = ET.Element('invoice')
+        create_invoice_items(invoice, order_element)
+        
+        text = invoice.find(f'.//{{{NS_INV}}}text')
+        assert text is not None
+        assert text.text == TEXT_POLOZKY
+
+    def test_creates_text_for_low_vat(self):
+        """Test that low VAT item uses low VAT text."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>0</price_high>
+                <price_vat_high>0</price_vat_high>
+                <price_low>500</price_low>
+                <price_vat_low>560</price_vat_low>
+                <price_none>0</price_none>
+                <price_vat_none>0</price_vat_none>
+            </item>
+        ''')
+        invoice = ET.Element('invoice')
+        create_invoice_items(invoice, item)
+        
+        text = invoice.find(f'.//{{{NS_INV}}}text')
+        assert text is not None
+        assert text.text == TEXT_POLOZKY_LOW
+
+    def test_creates_text_for_none_vat(self):
+        """Test that no VAT item uses no VAT text."""
+        item = ET.fromstring('''
+            <item>
+                <price_high>0</price_high>
+                <price_vat_high>0</price_vat_high>
+                <price_low>0</price_low>
+                <price_vat_low>0</price_vat_low>
+                <price_none>618</price_none>
+                <price_vat_none>618</price_vat_none>
+            </item>
+        ''')
+        invoice = ET.Element('invoice')
+        create_invoice_items(invoice, item)
+        
+        text = invoice.find(f'.//{{{NS_INV}}}text')
+        assert text is not None
+        assert text.text == TEXT_POLOZKY_NONE
 
 
 class TestCreateInvoiceElement:

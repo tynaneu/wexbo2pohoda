@@ -417,33 +417,35 @@ class TestSchemaValidation:
             home_curr = item.find('inv:homeCurrency', ns)
             assert home_curr is not None, "invoiceItem must contain homeCurrency element"
 
-    def test_homecurrency_has_unitprice(self, output_xml):
-        """Test that homeCurrency contains unitPrice element."""
+    def test_item_homecurrency_has_unitprice(self, output_xml):
+        """Test that item homeCurrency contains unitPrice element."""
         tree = ET.parse(output_xml)
         root = tree.getroot()
         
         ns = {'inv': NS_INV, 'typ': NS_TYP}
-        currencies = root.findall('.//inv:homeCurrency', ns)
+        items = root.findall('.//inv:invoiceItem', ns)
         
-        for currency in currencies:
-            unit_price = currency.find('typ:unitPrice', ns)
-            assert unit_price is not None, "homeCurrency must contain unitPrice element"
+        for item in items:
+            home_curr = item.find('inv:homeCurrency', ns)
+            unit_price = home_curr.find('typ:unitPrice', ns)
+            assert unit_price is not None, "item homeCurrency must contain unitPrice element"
             assert unit_price.text is not None and unit_price.text.strip(), \
                 "unitPrice element must have non-empty content"
 
-    def test_homecurrency_has_pricesum(self, output_xml):
-        """Test that homeCurrency contains priceSum element."""
+    def test_item_homecurrency_has_price_and_pricevat(self, output_xml):
+        """Test that item homeCurrency contains price and priceVAT elements."""
         tree = ET.parse(output_xml)
         root = tree.getroot()
         
         ns = {'inv': NS_INV, 'typ': NS_TYP}
-        currencies = root.findall('.//inv:homeCurrency', ns)
+        items = root.findall('.//inv:invoiceItem', ns)
         
-        for currency in currencies:
-            price_sum = currency.find('typ:priceSum', ns)
-            assert price_sum is not None, "homeCurrency must contain priceSum element"
-            assert price_sum.text is not None and price_sum.text.strip(), \
-                "priceSum element must have non-empty content"
+        for item in items:
+            home_curr = item.find('inv:homeCurrency', ns)
+            price = home_curr.find('typ:price', ns)
+            price_vat = home_curr.find('typ:priceVAT', ns)
+            assert price is not None, "item homeCurrency must contain price element"
+            assert price_vat is not None, "item homeCurrency must contain priceVAT element"
 
     def test_prices_are_numeric(self, output_xml):
         """Test that all prices are valid numeric values."""
@@ -452,9 +454,10 @@ class TestSchemaValidation:
         
         ns = {'typ': NS_TYP}
         unit_prices = root.findall('.//typ:unitPrice', ns)
-        price_sums = root.findall('.//typ:priceSum', ns)
+        prices = root.findall('.//typ:price', ns)
+        price_vats = root.findall('.//typ:priceVAT', ns)
         
-        for price in unit_prices + price_sums:
+        for price in unit_prices + prices + price_vats:
             try:
                 float(price.text)
             except (ValueError, TypeError):

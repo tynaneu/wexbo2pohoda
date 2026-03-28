@@ -9,6 +9,8 @@ import traceback
 # ==================== SETTINGS ====================
 CISLENA_RADA = "ESHOP"
 TEXT_POLOZKY = "Zboží / služby – e-shop"
+TEXT_POLOZKY_LOW = "Zboží / služby – e-shop – snížená sazba DPH"
+TEXT_POLOZKY_NONE = "Zboží / služby – e-shop – bez DPH"
 
 # ==================== NAMESPACES ====================
 NS_DAT = "http://www.stormware.cz/schema/version_2/data.xsd"
@@ -233,9 +235,9 @@ def create_invoice_items(invoice, order):
         
         # Set item text based on VAT rate
         if vat_item['vat_rate'] == 'none':
-            item_text = "Zboží bez DPH"
+            item_text = TEXT_POLOZKY_NONE
         elif vat_item['vat_rate'] == 'low':
-            item_text = "Knihy – snížená sazba DPH"
+            item_text = TEXT_POLOZKY_LOW
         else:
             item_text = TEXT_POLOZKY
         
